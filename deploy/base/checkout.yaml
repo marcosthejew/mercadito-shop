@@ -16,7 +16,7 @@ spec:
     spec:
       containers:
       - name: checkout
-        image: REPLACE_ME
+        image: mercadito-checkout
         ports:
         - containerPort: 8083
         envFrom:

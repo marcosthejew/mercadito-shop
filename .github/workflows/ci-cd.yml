@@ -1,0 +1,109 @@
+name: ci-cd
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-shop
+  cancel-in-progress: false
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_PREFIX: ghcr.io/${{ github.repository_owner }}/mercadito
+  NAMESPACE: marcos-shop
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: shop
+          POSTGRES_PASSWORD: shop
+          POSTGRES_DB: shop
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U shop" --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: go vet
+        run: go vet ./...
+      - name: Unit tests (race detector)
+        run: go test -race ./...
+      - name: Integration tests (Postgres)
+        env:
+          DATABASE_URL: postgres://shop:shop@localhost:5432/shop?sslmode=disable
+        run: go test -race -tags integration ./...
+
+  build:
+    needs: test
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      matrix:
+        service: [storefront, catalog, cart, checkout, payments-mock]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          build-args: SERVICE=${{ matrix.service }}
+          push: true
+          tags: ${{ env.IMAGE_PREFIX }}-${{ matrix.service }}:${{ github.sha }}
+          cache-from: type=gha,scope=${{ matrix.service }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.service }}
+
+  deploy:
+    needs: build
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-kubectl@v4
+      - name: Kubeconfig
+        run: |
+          mkdir -p ~/.kube
+          echo "${{ secrets.KUBECONFIG_SHOP_B64 }}" | base64 -d > ~/.kube/config
+          chmod 600 ~/.kube/config
+      - name: Pin images to this commit
+        run: |
+          {
+            echo "images:"
+            for s in storefront catalog cart checkout payments-mock; do
+              echo "  - name: mercadito-$s"
+              echo "    newName: ${IMAGE_PREFIX}-$s"
+              echo "    newTag: ${GITHUB_SHA}"
+            done
+          } >> deploy/prod/kustomization.yaml
+      - name: Run migrations
+        run: |
+          kubectl -n "$NAMESPACE" delete job catalog-migrate --ignore-not-found --wait=true
+          sed "s#image: mercadito-catalog#image: ${IMAGE_PREFIX}-catalog:${GITHUB_SHA}#" deploy/base/migrate-job.yaml \
+            | kubectl -n "$NAMESPACE" apply -f -
+          kubectl -n "$NAMESPACE" wait --for=condition=complete job/catalog-migrate --timeout=300s
+      - name: Roll out
+        run: |
+          kubectl apply -k deploy/prod
+          for d in payments-mock cart catalog checkout storefront; do
+            kubectl -n "$NAMESPACE" rollout status deployment/$d --timeout=300s
+          done
+      - name: Smoke test
+        run: |
+          curl -fsS --retry 10 --retry-delay 5 --retry-all-errors http://shop.178.105.120.178.sslip.io/ -o /dev/null

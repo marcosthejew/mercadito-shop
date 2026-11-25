@@ -4,7 +4,7 @@ metadata:
   name: storefront
 spec:
   rules:
-  - host: SHOP_HOST
+  - host: shop.178.105.120.178.sslip.io
     http:
       paths:
       - path: /

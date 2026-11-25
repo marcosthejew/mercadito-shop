@@ -16,7 +16,7 @@ spec:
     spec:
       containers:
       - name: storefront
-        image: REPLACE_ME
+        image: mercadito-storefront
         ports:
         - containerPort: 8080
         envFrom:

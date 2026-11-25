@@ -12,7 +12,7 @@ spec:
       restartPolicy: OnFailure
       containers:
       - name: migrate
-        image: REPLACE_ME
+        image: mercadito-catalog
         args: ["migrate"]
         env:
         - name: DATABASE_URL

@@ -1,0 +1,11 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - configmap.yaml
+  - storefront.yaml
+  - catalog.yaml
+  - cart.yaml
+  - checkout.yaml
+  - payments-mock.yaml
+  - ingress.yaml
+# migrate-job.yaml is applied separately by the pipeline, before the rollout.

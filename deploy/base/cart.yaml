@@ -16,7 +16,7 @@ spec:
     spec:
       containers:
       - name: cart
-        image: REPLACE_ME
+        image: mercadito-cart
         ports:
         - containerPort: 8082
         envFrom:

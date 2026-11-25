@@ -16,7 +16,7 @@ spec:
     spec:
       containers:
       - name: payments-mock
-        image: REPLACE_ME
+        image: mercadito-payments-mock
         ports:
         - containerPort: 8084
         envFrom:
