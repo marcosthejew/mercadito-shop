@@ -4,3 +4,13 @@ namespace: marcos-shop
 resources:
   - ../base
 # The pipeline appends an `images:` block here pinning every service to the commit SHA.
+# Images on GHCR are private: every pod pulls with the ghcr-pull Secret
+# (docker-registry type, read:packages token), created out of band in the namespace.
+patches:
+  - target:
+      kind: Deployment
+    patch: |-
+      - op: add
+        path: /spec/template/spec/imagePullSecrets
+        value:
+          - name: ghcr-pull

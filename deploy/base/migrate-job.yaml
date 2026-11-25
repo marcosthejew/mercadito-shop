@@ -10,6 +10,8 @@ spec:
         app: catalog-migrate
     spec:
       restartPolicy: OnFailure
+      imagePullSecrets:
+      - name: ghcr-pull
       containers:
       - name: migrate
         image: mercadito-catalog
