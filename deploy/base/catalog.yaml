@@ -53,9 +53,10 @@ spec:
               key: url
         resources:
           # No CPU limit: a 1-CPU limit throttled catalog up to 78% of the time and made
-          # recommendations slower. The request matches real use per pod.
+          # recommendations slower. 300m, not real use (~1 CPU): the namespace quota is
+          # 3 CPU of requests, and 4 pods + 1 rollout surge at 500m filled it.
           requests:
-            cpu: 500m
+            cpu: 300m
             memory: 128Mi
           limits:
             memory: 384Mi
