@@ -8,4 +8,5 @@ resources:
   - checkout.yaml
   - payments-mock.yaml
   - ingress.yaml
+  - catalog-cache.yaml
 # migrate-job.yaml is applied separately by the pipeline, before the rollout.

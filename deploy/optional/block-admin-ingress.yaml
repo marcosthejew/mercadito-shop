@@ -1,0 +1,26 @@
+# NOT applied (not listed in any kustomization). The fault injector's /admin routes are reachable
+# from the internet through the shop's Ingress, protected only by ADMIN_TOKEN. This Ingress sends
+# /admin on the public host to catalog-cache, which answers 404; in-cluster access keeps working.
+# Left off on purpose: the exercise harness may inject faults through the public URL.
+# To enable: kubectl -n marcos-shop apply -f deploy/optional/block-admin-ingress.yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: block-admin
+  namespace: marcos-shop
+spec:
+  tls:
+  - hosts:
+    - shop.178.105.120.178.sslip.io
+    secretName: shop-tls
+  rules:
+  - host: shop.178.105.120.178.sslip.io
+    http:
+      paths:
+      - path: /admin
+        pathType: Prefix
+        backend:
+          service:
+            name: catalog-cache
+            port:
+              number: 8081

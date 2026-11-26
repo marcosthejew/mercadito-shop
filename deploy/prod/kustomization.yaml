@@ -14,3 +14,25 @@ patches:
         path: /spec/template/spec/imagePullSecrets
         value:
           - name: ghcr-pull
+  # Every Deployment has one spread constraint (index 0). Counting only pods of the same
+  # revision keeps each service split across both workers after a rollout; without it the
+  # scheduler balanced against old pods about to go away (both cart pods ended on worker-2).
+  # Replacing pods 30 s after their node stops answering, instead of the default 300 s.
+  - target:
+      kind: Deployment
+    patch: |-
+      - op: add
+        path: /spec/template/spec/topologySpreadConstraints/0/matchLabelKeys
+        value:
+          - pod-template-hash
+      - op: add
+        path: /spec/template/spec/tolerations
+        value:
+          - key: node.kubernetes.io/not-ready
+            operator: Exists
+            effect: NoExecute
+            tolerationSeconds: 30
+          - key: node.kubernetes.io/unreachable
+            operator: Exists
+            effect: NoExecute
+            tolerationSeconds: 30

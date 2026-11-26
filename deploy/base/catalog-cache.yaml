@@ -1,0 +1,170 @@
+# Caching proxy between storefront and catalog (storefront reaches it through CATALOG_URL).
+# Recommendations are deterministic per product and cost ~144 ms of CPU each, which saturated
+# catalog; thumbnails were generated for any width 16-2048 and cached without limit, so anyone
+# could exhaust catalog's memory. The proxy caches both and only lets through the three widths
+# the shop's own templates use. Product detail is not cached: it carries live stock.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: catalog-cache
+data:
+  default.conf: |
+    proxy_cache_path /cache levels=1:2 keys_zone=catalog:10m max_size=100m inactive=60m use_temp_path=off;
+
+    # Widths used by web/templates: 240 (home), 160 (recommendations), 480 (product page).
+    map $arg_w $thumb_width_allowed {
+      ""      1;
+      "160"   1;
+      "240"   1;
+      "480"   1;
+      default 0;
+    }
+
+    server {
+      listen 8081;
+
+      location = /proxy-health {
+        access_log off;
+        return 200;
+      }
+
+      # Only reached through deploy/optional/block-admin-ingress.yaml (off by default).
+      location /admin {
+        return 404;
+      }
+
+      location ~ ^/products/[0-9]+/recommendations$ {
+        proxy_pass http://catalog:8081;
+        proxy_cache catalog;
+        proxy_cache_valid 200 10m;
+        # One computation per product even when many requests miss at once.
+        proxy_cache_lock on;
+        proxy_cache_lock_timeout 15s;
+        proxy_cache_use_stale error timeout updating;
+        add_header X-Cache $upstream_cache_status;
+      }
+
+      location ~ ^/images/[0-9]+$ {
+        if ($thumb_width_allowed = 0) {
+          return 400;
+        }
+        proxy_pass http://catalog:8081;
+        proxy_cache catalog;
+        proxy_cache_valid 200 60m;
+        proxy_cache_lock on;
+        proxy_cache_lock_timeout 15s;
+        add_header X-Cache $upstream_cache_status;
+      }
+
+      location / {
+        proxy_pass http://catalog:8081;
+      }
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: catalog-cache
+  labels:
+    app: catalog-cache
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: catalog-cache
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app: catalog-cache
+      annotations:
+        # Bump when default.conf changes so the pods restart with the new configuration.
+        config-revision: "1"
+    spec:
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 101
+        runAsGroup: 101
+      topologySpreadConstraints:
+      - maxSkew: 1
+        topologyKey: kubernetes.io/hostname
+        whenUnsatisfiable: DoNotSchedule
+        nodeTaintsPolicy: Honor
+        labelSelector:
+          matchLabels:
+            app: catalog-cache
+      containers:
+      - name: nginx
+        image: nginxinc/nginx-unprivileged:1.27.4-alpine
+        ports:
+        - name: http
+          containerPort: 8081
+        resources:
+          requests:
+            cpu: 50m
+            memory: 32Mi
+          limits:
+            memory: 128Mi
+        readinessProbe:
+          httpGet:
+            path: /proxy-health
+            port: http
+          periodSeconds: 5
+        livenessProbe:
+          httpGet:
+            path: /proxy-health
+            port: http
+          periodSeconds: 10
+        lifecycle:
+          preStop:
+            sleep:
+              seconds: 5
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]
+        volumeMounts:
+        - name: conf
+          mountPath: /etc/nginx/conf.d
+        - name: cache
+          mountPath: /cache
+        - name: tmp
+          mountPath: /tmp
+      volumes:
+      - name: conf
+        configMap:
+          name: catalog-cache
+      - name: cache
+        emptyDir:
+          sizeLimit: 200Mi
+      - name: tmp
+        emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: catalog-cache
+  labels:
+    app: catalog-cache
+spec:
+  selector:
+    app: catalog-cache
+  ports:
+  - port: 8081
+    targetPort: http
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: catalog-cache
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: catalog-cache

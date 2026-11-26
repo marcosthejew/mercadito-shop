@@ -101,7 +101,7 @@ jobs:
       - name: Roll out
         run: |
           kubectl apply -k deploy/prod
-          for d in payments-mock cart catalog checkout storefront; do
+          for d in payments-mock cart catalog catalog-cache checkout storefront; do
             kubectl -n "$NAMESPACE" rollout status deployment/$d --timeout=300s
           done
       - name: Smoke test

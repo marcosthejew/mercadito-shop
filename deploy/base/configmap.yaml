@@ -3,12 +3,15 @@ kind: ConfigMap
 metadata:
   name: shop-config
 data:
-  CATALOG_URL: http://catalog:8081
+  # storefront goes through the caching proxy (catalog-cache.yaml), not straight to catalog.
+  CATALOG_URL: http://catalog-cache:8081
   CART_URL: http://cart:8082
   CHECKOUT_URL: http://checkout:8083
   PAYMENTS_URL: http://payments-mock:8084
   WARMUP_SECONDS: "45"
-  THUMB_CACHE_MAX_MB: "0"
+  # 0 meant no limit: any width 16-2048 was cached forever. Second line of defence behind
+  # catalog-cache, which already rejects widths the shop does not use.
+  THUMB_CACHE_MAX_MB: "64"
   CART_STORE: redis
   # Per checkout pod. Postgres allows 47; worst case during a deploy is 3 checkout pods x 6
   # + 5 catalog pods x 4 + ~6 internal = 44.
