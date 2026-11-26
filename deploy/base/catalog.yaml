@@ -52,10 +52,12 @@ spec:
               name: shop-postgres
               key: url
         resources:
+          # The CPU limit keeps catalog from starving the node, its own /readyz included.
           requests:
-            cpu: 100m
+            cpu: 500m
             memory: 128Mi
           limits:
+            cpu: "1"
             memory: 384Mi
         # /readyz stays 503 during the WARMUP_SECONDS index build, so new pods
         # only get traffic once warm. /healthz is 200 from the start, so the
@@ -65,7 +67,9 @@ spec:
             path: /readyz
             port: http
           periodSeconds: 5
-          failureThreshold: 2
+          # /readyz pings Postgres; 1 s was too tight under load.
+          timeoutSeconds: 3
+          failureThreshold: 3
         livenessProbe:
           httpGet:
             path: /healthz
@@ -112,7 +116,8 @@ spec:
     kind: Deployment
     name: catalog
   minReplicas: 2
-  maxReplicas: 4
+  # 3 x 1 CPU leaves a core of the two workers free for everything else.
+  maxReplicas: 3
   metrics:
   - type: Resource
     resource:
