@@ -1,8 +1,8 @@
 # Caching proxy between storefront and catalog (storefront reaches it through CATALOG_URL).
 # Recommendations are deterministic per product and cost ~144 ms of CPU each, which saturated
-# catalog; thumbnails were generated for any width 16-2048 and cached without limit, so anyone
-# could exhaust catalog's memory. The proxy caches both and only lets through the three widths
-# the shop's own templates use. Product detail is not cached: it carries live stock.
+# catalog; the proxy caches them. Thumbnails in the widths the shop's templates use are cached
+# too; any other valid width is still served, uncached, with a cap on how many are generated at
+# once. Product detail is not cached: it carries live stock.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -11,14 +11,18 @@ data:
   default.conf: |
     proxy_cache_path /cache levels=1:2 keys_zone=catalog:10m max_size=100m inactive=60m use_temp_path=off;
 
-    # Widths used by web/templates: 240 (home), 160 (recommendations), 480 (product page).
-    map $arg_w $thumb_width_allowed {
-      ""      1;
-      "160"   1;
-      "240"   1;
-      "480"   1;
-      default 0;
+    # Widths used by web/templates: 240 (home), 160 (recommendations), 480 (product page) are
+    # cached. Any other width is served uncached, at most 4 at a time per proxy pod: each one makes
+    # catalog generate a fresh image (up to 2.6 MB and ~11 s of CPU at 2048 px). An empty key is
+    # not counted by limit_conn and does not bypass the cache.
+    map $arg_w $unusual_width {
+      ""      "";
+      "160"   "";
+      "240"   "";
+      "480"   "";
+      default "1";
     }
+    limit_conn_zone $unusual_width zone=unusual_widths:1m;
 
     server {
       listen 8081;
@@ -45,12 +49,13 @@ data:
       }
 
       location ~ ^/images/[0-9]+$ {
-        if ($thumb_width_allowed = 0) {
-          return 400;
-        }
+        limit_conn unusual_widths 4;
+        limit_conn_status 503;
         proxy_pass http://catalog:8081;
         proxy_cache catalog;
         proxy_cache_valid 200 60m;
+        proxy_no_cache $unusual_width;
+        proxy_cache_bypass $unusual_width;
         proxy_cache_lock on;
         proxy_cache_lock_timeout 15s;
         add_header X-Cache $upstream_cache_status;
@@ -83,7 +88,7 @@ spec:
         app: catalog-cache
       annotations:
         # Bump when default.conf changes so the pods restart with the new configuration.
-        config-revision: "1"
+        config-revision: "2"
     spec:
       terminationGracePeriodSeconds: 30
       securityContext:
