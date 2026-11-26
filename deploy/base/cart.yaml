@@ -5,20 +5,39 @@ metadata:
   labels:
     app: cart
 spec:
-  replicas: 1
+  replicas: 2
   selector:
     matchLabels:
       app: cart
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
   template:
     metadata:
       labels:
         app: cart
     spec:
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+      topologySpreadConstraints:
+      - maxSkew: 1
+        topologyKey: kubernetes.io/hostname
+        whenUnsatisfiable: DoNotSchedule
+        nodeTaintsPolicy: Honor
+        labelSelector:
+          matchLabels:
+            app: cart
       containers:
       - name: cart
         image: mercadito-cart
         ports:
-        - containerPort: 8082
+        - name: http
+          containerPort: 8082
         envFrom:
         - configMapRef:
             name: shop-config
@@ -27,6 +46,30 @@ spec:
           valueFrom:
             fieldRef:
               fieldPath: metadata.name
+        resources:
+          requests:
+            cpu: 25m
+            memory: 32Mi
+          limits:
+            memory: 128Mi
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: http
+          periodSeconds: 5
+          failureThreshold: 2
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: http
+          periodSeconds: 10
+          timeoutSeconds: 2
+          failureThreshold: 3
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]
 ---
 apiVersion: v1
 kind: Service
@@ -39,4 +82,14 @@ spec:
     app: cart
   ports:
   - port: 8082
-    targetPort: 8082
+    targetPort: http
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: cart
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: cart

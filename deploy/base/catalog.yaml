@@ -5,20 +5,39 @@ metadata:
   labels:
     app: catalog
 spec:
-  replicas: 1
+  # No replicas field: the HPA below owns the replica count.
   selector:
     matchLabels:
       app: catalog
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
   template:
     metadata:
       labels:
         app: catalog
     spec:
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+      topologySpreadConstraints:
+      - maxSkew: 1
+        topologyKey: kubernetes.io/hostname
+        whenUnsatisfiable: DoNotSchedule
+        nodeTaintsPolicy: Honor
+        labelSelector:
+          matchLabels:
+            app: catalog
       containers:
       - name: catalog
         image: mercadito-catalog
         ports:
-        - containerPort: 8081
+        - name: http
+          containerPort: 8081
         envFrom:
         - configMapRef:
             name: shop-config
@@ -32,6 +51,33 @@ spec:
             secretKeyRef:
               name: shop-postgres
               key: url
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            memory: 384Mi
+        # /readyz stays 503 during the WARMUP_SECONDS index build, so new pods
+        # only get traffic once warm. /healthz is 200 from the start, so the
+        # liveness probe never kills a pod that is still warming up.
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: http
+          periodSeconds: 5
+          failureThreshold: 2
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: http
+          periodSeconds: 10
+          timeoutSeconds: 2
+          failureThreshold: 3
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]
 ---
 apiVersion: v1
 kind: Service
@@ -44,4 +90,33 @@ spec:
     app: catalog
   ports:
   - port: 8081
-    targetPort: 8081
+    targetPort: http
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: catalog
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: catalog
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: catalog
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: catalog
+  minReplicas: 2
+  maxReplicas: 4
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70

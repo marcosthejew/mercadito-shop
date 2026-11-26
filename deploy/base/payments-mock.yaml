@@ -5,20 +5,39 @@ metadata:
   labels:
     app: payments-mock
 spec:
-  replicas: 1
+  replicas: 2
   selector:
     matchLabels:
       app: payments-mock
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
   template:
     metadata:
       labels:
         app: payments-mock
     spec:
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+      topologySpreadConstraints:
+      - maxSkew: 1
+        topologyKey: kubernetes.io/hostname
+        whenUnsatisfiable: DoNotSchedule
+        nodeTaintsPolicy: Honor
+        labelSelector:
+          matchLabels:
+            app: payments-mock
       containers:
       - name: payments-mock
         image: mercadito-payments-mock
         ports:
-        - containerPort: 8084
+        - name: http
+          containerPort: 8084
         envFrom:
         - configMapRef:
             name: shop-config
@@ -27,6 +46,30 @@ spec:
           valueFrom:
             fieldRef:
               fieldPath: metadata.name
+        resources:
+          requests:
+            cpu: 25m
+            memory: 32Mi
+          limits:
+            memory: 128Mi
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: http
+          periodSeconds: 5
+          failureThreshold: 2
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: http
+          periodSeconds: 10
+          timeoutSeconds: 2
+          failureThreshold: 3
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]
 ---
 apiVersion: v1
 kind: Service
@@ -39,4 +82,14 @@ spec:
     app: payments-mock
   ports:
   - port: 8084
-    targetPort: 8084
+    targetPort: http
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: payments-mock
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: payments-mock

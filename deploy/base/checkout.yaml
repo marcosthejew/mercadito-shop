@@ -5,20 +5,39 @@ metadata:
   labels:
     app: checkout
 spec:
-  replicas: 1
+  replicas: 2
   selector:
     matchLabels:
       app: checkout
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
   template:
     metadata:
       labels:
         app: checkout
     spec:
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+      topologySpreadConstraints:
+      - maxSkew: 1
+        topologyKey: kubernetes.io/hostname
+        whenUnsatisfiable: DoNotSchedule
+        nodeTaintsPolicy: Honor
+        labelSelector:
+          matchLabels:
+            app: checkout
       containers:
       - name: checkout
         image: mercadito-checkout
         ports:
-        - containerPort: 8083
+        - name: http
+          containerPort: 8083
         envFrom:
         - configMapRef:
             name: shop-config
@@ -32,6 +51,30 @@ spec:
             secretKeyRef:
               name: shop-postgres
               key: url
+        resources:
+          requests:
+            cpu: 50m
+            memory: 48Mi
+          limits:
+            memory: 128Mi
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: http
+          periodSeconds: 5
+          failureThreshold: 2
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: http
+          periodSeconds: 10
+          timeoutSeconds: 2
+          failureThreshold: 3
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]
 ---
 apiVersion: v1
 kind: Service
@@ -44,4 +87,14 @@ spec:
     app: checkout
   ports:
   - port: 8083
-    targetPort: 8083
+    targetPort: http
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: checkout
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: checkout
